@@ -141,10 +141,10 @@ const TRANSITIONS = {
   BLOCKED: ['TODO', 'IN_PROGRESS'],
 };
 
-const STATUS_COLORS = {
-  TODO: '#6b6b85', IN_PROGRESS: '#7c6af7',
-  IN_REVIEW: '#f7a26a', DONE: '#4af7a2', BLOCKED: '#f76a7c',
-};
+// const STATUS_COLORS = {
+//   TODO: '#6b6b85', IN_PROGRESS: '#7c6af7',
+//   IN_REVIEW: '#f7a26a', DONE: '#4af7a2', BLOCKED: '#f76a7c',
+// };
 
 function TaskDetailPanel({ task, user, onClose, onEdit, onDelete, onTransition }) {
   const canEdit = user.role !== 'MEMBER';

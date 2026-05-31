@@ -1,0 +1,83 @@
+version: '3.9'
+
+services:
+  api:
+    build: .
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: tasktracker
+      DB_USER: taskuser
+      DB_PASSWORD: taskpassword
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_ACCESS_SECRET: change-me-in-production-access-secret-min-32-chars
+      JWT_REFRESH_SECRET: change-me-in-production-refresh-secret-min-32-chars
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      CACHE_TTL: 300
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # Runs migrations + seed data on startup, then exits
+  migrate:
+    build: .
+    command: sh -c "node scripts/migrate.js && node scripts/seed.js"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: tasktracker
+      DB_USER: taskuser
+      DB_PASSWORD: taskpassword
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tasktracker
+      POSTGRES_USER: taskuser
+      POSTGRES_PASSWORD: taskpassword
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U taskuser -d tasktracker']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  internal:
+    driver: bridge

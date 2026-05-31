@@ -29,7 +29,6 @@ services:
     networks:
       - internal
 
-  # Runs migrations + seed data on startup, then exits
   migrate:
     build: .
     command: sh -c "node scripts/migrate.js && node scripts/seed.js"
@@ -42,6 +41,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - internal
+
+  frontend:
+    build: ./frontend
+    ports:
+      - '3001:3001'
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3000/api/v1
+    depends_on:
+      - api
+    restart: unless-stopped
     networks:
       - internal
 

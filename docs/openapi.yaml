@@ -1,0 +1,583 @@
+openapi: 3.0.3
+info:
+  title: Team Task Tracker API
+  description: |
+    REST API for managing tasks within a team. Supports JWT auth with refresh token rotation,
+    role-based access control (ADMIN / MANAGER / MEMBER), Redis caching, and enforced status transitions.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 400
+        code:
+          type: string
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          example: due_date must be a future date
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [TODO, IN_PROGRESS, IN_REVIEW, DONE, BLOCKED]
+        priority:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        dueDate:
+          type: string
+          format: date-time
+        projectId:
+          type: string
+          format: uuid
+        projectName:
+          type: string
+        assigneeId:
+          type: string
+          format: uuid
+        assigneeName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [ADMIN, MANAGER, MEMBER]
+        organizationId:
+          type: string
+          format: uuid
+
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        taskCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name:
+                  type: string
+                  example: Alice Admin
+                email:
+                  type: string
+                  example: alice@example.com
+                password:
+                  type: string
+                  example: Password1
+                  description: Min 8 chars, must include upper, lower, digit
+                organizationName:
+                  type: string
+                  example: Acme Corp
+                  description: Create a new org (omit if joining existing)
+                organizationId:
+                  type: string
+                  format: uuid
+                  description: Join an existing org (omit if creating new)
+      responses:
+        '201':
+          description: Registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: '#/components/schemas/User'
+                      accessToken:
+                        type: string
+                      refreshToken:
+                        type: string
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Email already exists
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  example: admin@demo.com
+                password:
+                  type: string
+                  example: Password1
+      responses:
+        '200':
+          description: Login successful
+        '401':
+          description: Invalid credentials
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Refresh access token (rotation)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: New token pair issued
+        '401':
+          description: Invalid or expired refresh token
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout (revokes all refresh tokens)
+      responses:
+        '200':
+          description: Logged out
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user
+      responses:
+        '200':
+          description: Current user info
+
+  /tasks:
+    get:
+      tags: [Tasks]
+      summary: List tasks (paginated + filtered)
+      description: |
+        MEMBERs only see tasks assigned to them.
+        MANAGERs and ADMINs can filter by any assignee.
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [TODO, IN_PROGRESS, IN_REVIEW, DONE, BLOCKED]
+        - in: query
+          name: priority
+          schema:
+            type: string
+            enum: [LOW, MEDIUM, HIGH]
+        - in: query
+          name: assigneeId
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: Task list with pagination meta
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Task'
+                  meta:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                      page:
+                        type: integer
+                      limit:
+                        type: integer
+                      totalPages:
+                        type: integer
+
+    post:
+      tags: [Tasks]
+      summary: Create a task (MANAGER+)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, projectId]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                  enum: [LOW, MEDIUM, HIGH]
+                  default: MEDIUM
+                assigneeId:
+                  type: string
+                  format: uuid
+                dueDate:
+                  type: string
+                  format: date-time
+                  description: Must be a future date
+                projectId:
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: Task created
+
+  /tasks/{id}:
+    get:
+      tags: [Tasks]
+      summary: Get a task
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Task detail
+        '404':
+          description: Task not found
+
+    patch:
+      tags: [Tasks]
+      summary: Update task fields (MANAGER+)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                  enum: [LOW, MEDIUM, HIGH]
+                assigneeId:
+                  type: string
+                  format: uuid
+                dueDate:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Task updated
+
+    delete:
+      tags: [Tasks]
+      summary: Delete task (MANAGER+)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Deleted
+
+  /tasks/{id}/status:
+    patch:
+      tags: [Tasks]
+      summary: Transition task status
+      description: |
+        Enforced transitions:
+        - TODO → IN_PROGRESS | BLOCKED
+        - IN_PROGRESS → IN_REVIEW | BLOCKED
+        - IN_REVIEW → DONE | BLOCKED
+        - BLOCKED → TODO | IN_PROGRESS
+        - DONE → (terminal)
+
+        Only the assignee or MANAGER+ can change status.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [TODO, IN_PROGRESS, IN_REVIEW, DONE, BLOCKED]
+      responses:
+        '200':
+          description: Status updated
+        '400':
+          description: Invalid transition
+
+  /tasks/analytics:
+    get:
+      tags: [Tasks]
+      summary: Overdue count + avg completion time per user (MANAGER+)
+      responses:
+        '200':
+          description: Analytics data
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List org members (all roles)
+      responses:
+        '200':
+          description: User list
+
+  /users/{id}:
+    get:
+      tags: [Users]
+      summary: Get a user (all roles)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User detail
+
+  /users/{id}/role:
+    patch:
+      tags: [Users]
+      summary: Change user role (ADMIN only)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [ADMIN, MANAGER, MEMBER]
+      responses:
+        '200':
+          description: Role updated
+
+  /users/{id}:
+    delete:
+      tags: [Users]
+      summary: Remove user from org (ADMIN only)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User removed
+
+  /projects:
+    get:
+      tags: [Projects]
+      summary: List projects (all roles)
+      responses:
+        '200':
+          description: Project list
+
+    post:
+      tags: [Projects]
+      summary: Create project (MANAGER+)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Project created
+
+  /projects/{id}:
+    get:
+      tags: [Projects]
+      summary: Get project (all roles)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Project detail
+
+    patch:
+      tags: [Projects]
+      summary: Update project (MANAGER+)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '200':
+          description: Project updated
+
+    delete:
+      tags: [Projects]
+      summary: Delete project (ADMIN only)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Project deleted
